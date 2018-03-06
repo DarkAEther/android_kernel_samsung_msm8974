@@ -87,7 +87,6 @@ struct gpio_keys_drvdata {
 #endif
 #ifdef CONFIG_SENSORS_HALL
 	int gpio_flip_cover;
-	int flip_code;
 	int irq_flip_cover;
 	bool flip_cover;
 	struct delayed_work flip_cover_dwork;
@@ -706,16 +705,7 @@ fail:
 	return error;
 }
 
-
-#if defined(CONFIG_DUAL_LCD)
-int samsung_switching_lcd(int flip);
-int samsung_switching_tsp(int flip);
-int samsung_switching_tkey(int flip);
-int samsung_switching_ssp(int flip);
-#endif
-
 #ifdef CONFIG_SENSORS_HALL
-static int flip_status_before;
 
 #ifdef CONFIG_SEC_FACTORY
 static void flip_cover_work(struct work_struct *work)
@@ -746,28 +736,13 @@ static void flip_cover_work(struct work_struct *work)
 #else
 	if ((comp_val[0] == comp_val[1]) && (comp_val[0] == comp_val[2])) {
 #endif
-		if (ddata->flip_code == SW_LID)
-			ddata->flip_cover = !gpio_get_value(ddata->gpio_flip_cover);
-		else
-			ddata->flip_cover = gpio_get_value(ddata->gpio_flip_cover);
-
-		printk(KERN_DEBUG "[keys] %s : %d code 0x%x\n",
-			__func__, ddata->flip_cover, ddata->flip_code);
+		ddata->flip_cover = gpio_get_value(ddata->gpio_flip_cover);
+		printk(KERN_DEBUG "[keys] %s : %d\n",
+			__func__, ddata->flip_cover);
 
 		input_report_switch(ddata->input,
-			ddata->flip_code, ddata->flip_cover);
+			SW_LID, !ddata->flip_cover);
 		input_sync(ddata->input);
-
-		if (ddata->flip_cover != flip_status_before) {
-#if defined(CONFIG_DUAL_LCD)
-			samsung_switching_lcd(ddata->flip_cover);
-			samsung_switching_tsp(ddata->flip_cover);
-			samsung_switching_tkey(ddata->flip_cover);
-			samsung_switching_ssp(ddata->flip_cover);
-#endif
-		}
-
-		flip_status_before = ddata->flip_cover;
 	} else {
 		printk(KERN_DEBUG "%s : Value is not same!\n", __func__);
 	}
@@ -779,28 +754,13 @@ static void flip_cover_work(struct work_struct *work)
 		container_of(work, struct gpio_keys_drvdata,
 				flip_cover_dwork.work);
 
-	if (ddata->flip_code == SW_LID)
-		ddata->flip_cover = !gpio_get_value(ddata->gpio_flip_cover);
-	else
-		ddata->flip_cover = gpio_get_value(ddata->gpio_flip_cover);
-
-	printk(KERN_DEBUG "[keys] %s : %d code 0x%x\n",
-		__func__, ddata->flip_cover, ddata->flip_code);
+	ddata->flip_cover = gpio_get_value(ddata->gpio_flip_cover);
+	printk(KERN_DEBUG "[keys] %s : %d\n",
+		__func__, ddata->flip_cover);
 
 	input_report_switch(ddata->input,
-			ddata->flip_code, ddata->flip_cover);
+		SW_LID, !ddata->flip_cover);
 	input_sync(ddata->input);
-
-	if (ddata->flip_cover != flip_status_before) {
-#if defined(CONFIG_DUAL_LCD)
-		samsung_switching_lcd(ddata->flip_cover);
-		samsung_switching_tsp(ddata->flip_cover);
-		samsung_switching_tkey(ddata->flip_cover);
-		samsung_switching_ssp(ddata->flip_cover);
-#endif
-	}
-
-	flip_status_before = ddata->flip_cover;
 }
 #endif // CONFIG_SEC_FACTORY
 
@@ -846,7 +806,6 @@ out:
 static irqreturn_t flip_cover_detect(int irq, void *dev_id)
 {
 	bool flip_status;
-	struct gpio_keys_drvdata *ddata = dev_id;
 #ifdef CONFIG_SENSORS_HALL_IRQ_CTRL
 	bool debounce_status;
 #endif
@@ -861,12 +820,10 @@ static irqreturn_t flip_cover_detect(int irq, void *dev_id)
 	DTIME_WAKE = ddata->debounce_set ? (HZ*14/100) : (HZ*5/100);
 #endif
 
-	if (ddata->flip_code == SW_LID)
-		flip_status = !gpio_get_value(ddata->gpio_flip_cover);
-	else
-		flip_status = gpio_get_value(ddata->gpio_flip_cover);
+	struct gpio_keys_drvdata *ddata = dev_id;
 
-	cancel_delayed_work_sync(&ddata->flip_cover_dwork);
+	flip_status = gpio_get_value(ddata->gpio_flip_cover);
+
 #ifdef CONFIG_SENSORS_HALL_DEBOUNCE
 	printk(KERN_DEBUG "[keys] %s flip_satatus : %d, IRQt : %d, WAKEt : %d\n",
 		__func__, flip_status, DTIME_IRQ, DTIME_WAKE);
@@ -883,6 +840,8 @@ static irqreturn_t flip_cover_detect(int irq, void *dev_id)
 	printk(KERN_DEBUG "[keys] %s flip_satatus : %d\n",
 		__func__, flip_status);
 
+	cancel_delayed_work_sync(&ddata->flip_cover_dwork);
+	
 	if(flip_status) {
 		wake_lock_timeout(&ddata->flip_wake_lock, HZ * 5 / 100); /* 50ms */
 		schedule_delayed_work(&ddata->flip_cover_dwork, HZ * 1 / 100); /* 10ms */
@@ -1147,9 +1106,8 @@ static int gpio_keys_get_devtree_pdata(struct device *dev,
 
 		buttons[i].desc = of_get_property(pp, "label", NULL);
 #ifdef CONFIG_SENSORS_HALL
-		if ((buttons[i].code == SW_FLIP) || (buttons[i].code == SW_LID)) {
+		if (buttons[i].code == SW_FLIP) {
 			pdata->gpio_flip_cover = buttons[i].gpio;
-			pdata->flip_code = buttons[i].code;
 			pdata->nbuttons--;
 #ifdef CONFIG_SENSORS_HALL_IRQ_CTRL
 			pdata->workaround_set = (of_property_read_bool(pp, "hall_wa_disable") ? false : true);
@@ -1444,11 +1402,9 @@ static int __devinit gpio_keys_probe(struct platform_device *pdev)
 	}
 #endif
 	ddata->gpio_flip_cover = pdata->gpio_flip_cover;
-	ddata->flip_code = pdata->flip_code;
 	ddata->irq_flip_cover = gpio_to_irq(ddata->gpio_flip_cover);
 	wake_lock_init(&ddata->flip_wake_lock, WAKE_LOCK_SUSPEND,
 		"flip_wake_lock");
-	flip_status_before = -1;
 #endif
 	mutex_init(&ddata->disable_lock);
 #ifdef CONFIG_SENSORS_HALL_IRQ_CTRL
@@ -1464,7 +1420,7 @@ static int __devinit gpio_keys_probe(struct platform_device *pdev)
 #ifdef CONFIG_SENSORS_HALL
 	if(ddata->gpio_flip_cover != 0) {
 		input->evbit[0] |= BIT_MASK(EV_SW);
-		input_set_capability(input, EV_SW, ddata->flip_code);
+		input_set_capability(input, EV_SW, SW_LID);
 	}
 #endif
 #ifdef CONFIG_SENSORS_HALL_IRQ_CTRL
@@ -1721,10 +1677,7 @@ static int gpio_keys_resume(struct device *dev)
 			disable_irq_wake(bdata->irq);
 
 		if (gpio_is_valid(bdata->button->gpio))
-		{
-			if(!(bdata->button->code == 172))
-				gpio_keys_gpio_report_event(bdata);
-		}
+			gpio_keys_gpio_report_event(bdata);
 	}
 #ifdef CONFIG_SENSORS_HALL
 	if (device_may_wakeup(dev) && ddata->gpio_flip_cover != 0) {
