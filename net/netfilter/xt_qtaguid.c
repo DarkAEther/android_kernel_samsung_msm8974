@@ -824,7 +824,7 @@ static int iface_stat_fmt_proc_read(char *page, char **num_items_returned,
 	int len;
 	int fmt = (int)data; /* The data is just 1 (old) or 2 (uses fmt) */
 	struct iface_stat *iface_entry;
-	struct rtnl_link_stats64 dev_stats, *stats;
+	struct rtnl_link_stats64 *stats;
 	struct rtnl_link_stats64 no_dev_stats = {0};
 
 	if (unlikely(module_passive)) {
@@ -863,12 +863,7 @@ static int iface_stat_fmt_proc_read(char *page, char **num_items_returned,
 		if (item_index++ < items_to_skip)
 			continue;
 
-		if (iface_entry->active) {
-			stats = dev_get_stats(iface_entry->net_dev,
-					      &dev_stats);
-		} else {
-			stats = &no_dev_stats;
-		}
+		stats = &no_dev_stats;
 		/*
 		 * If the meaning of the data changes, then update the fmtX
 		 * string.
